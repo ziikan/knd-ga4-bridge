@@ -4,11 +4,31 @@
   var GA4_ID = 'G-TYDY8XMCHB';
   var META_PIXEL_ID = '202253855746154';
   var sent = {};
+  var sentAt = {};
+  var basketBound = false;
 
   function once(key, fn) {
     if (sent[key]) return;
     sent[key] = true;
     try { fn(); } catch (e) { console.warn('[KND GA4 bridge]', e); }
+  }
+
+  function stableItemKey(items) {
+    return (items || []).map(function (item) {
+      return [item.item_id || '', item.item_name || '', item.price || 0, item.quantity || 1].join(':');
+    }).join('|');
+  }
+
+  function dedupe(key, ttlMs, fn) {
+    var now = Date.now();
+    if (sentAt[key] && now - sentAt[key] < ttlMs) return;
+    sentAt[key] = now;
+    try { fn(); } catch (e) { console.warn('[KND GA4 bridge]', e); }
+  }
+
+  function dedupeEvent(name, payload, ttlMs) {
+    var key = name + ':' + (payload.transaction_id || payload.event_id || '') + ':' + stableItemKey(payload.items) + ':' + (payload.value || 0) + ':' + location.pathname;
+    dedupe(key, ttlMs || 2000, function () { send(name, payload); });
   }
 
   window.dataLayer = window.dataLayer || [];
@@ -62,11 +82,11 @@
       var first = payload.items && payload.items[0];
       once('view_item_' + (first && first.item_id || location.pathname), function () { send('view_item', payload); });
     }
-    if (ev === 'AddToCart') send('add_to_cart', payload);
-    if (ev === 'InitiateCheckout') send('begin_checkout', payload);
+    if (ev === 'AddToCart') dedupeEvent('add_to_cart', payload, 2000);
+    if (ev === 'InitiateCheckout') dedupeEvent('begin_checkout', payload, 5000);
     if (ev === 'Purchase') {
       payload.transaction_id = payload.transaction_id || String(params.order_id || params.order_no || Date.now());
-      send('purchase', payload);
+      once('purchase_' + payload.transaction_id, function () { send('purchase', payload); });
     }
   }
 
@@ -95,12 +115,13 @@
   }
 
   function bindCafe24Basket() {
+    if (basketBound) return true;
     var jq = window.EC$ || window.jQuery || window.$;
     if (!jq || !jq('body').bind) return false;
     jq('body').bind('EC_PRODUCT_ACTION_BASKET', function (e, params) {
       params = params || {};
       var contents = params.contents || [];
-      send('add_to_cart', {
+      var payload = {
         currency: 'KRW',
         value: num(params.total_price),
         items: contents.map(function (c) {
@@ -111,8 +132,10 @@
             quantity: num(c.quantity || 1) || 1
           };
         })
-      });
+      };
+      dedupeEvent('add_to_cart', payload, 2000);
     });
+    basketBound = true;
     return true;
   }
 
