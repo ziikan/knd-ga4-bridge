@@ -58,7 +58,10 @@
     if (!items.length && (ev === 'ViewContent' || ev === 'AddToCart')) items = [itemFromGlobals()];
     var payload = { currency: params.currency || 'KRW', value: num(params.value || params.total_price), items: items };
     if (params.event_id) payload.transaction_id = String(params.event_id);
-    if (ev === 'ViewContent') send('view_item', payload);
+    if (ev === 'ViewContent') {
+      var first = payload.items && payload.items[0];
+      once('view_item_' + (first && first.item_id || location.pathname), function () { send('view_item', payload); });
+    }
     if (ev === 'AddToCart') send('add_to_cart', payload);
     if (ev === 'InitiateCheckout') send('begin_checkout', payload);
     if (ev === 'Purchase') {
